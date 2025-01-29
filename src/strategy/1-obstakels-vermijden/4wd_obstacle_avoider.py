@@ -210,7 +210,7 @@ def get_best_direction(distances: list):
     
     return idx
 
-### get_best_direction ###
+### get_best_direction ####
 
 
 def compute_turn():
