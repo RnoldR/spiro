@@ -324,10 +324,12 @@ class MotorKit(object):
         Raises:
             ValueError: _description_
         """
-        print('move_turn_wheels', direction, speed)
+        if self.verbose:
+            print('move_turn_wheels', direction, speed)
         # correct if speed is outside bounds
         speed = self.check_speed(speed)
-        print('move_turn_wheels after checkspeed', direction, speed)
+        if self.verbose:
+            print('move_turn_wheels after checkspeed', direction, speed)
         
         # set the direction of left and right motors
         if direction == 'right':

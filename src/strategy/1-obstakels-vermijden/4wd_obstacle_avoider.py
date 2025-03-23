@@ -155,11 +155,11 @@ def get_bno055_sensor(i2c_bus):
 ### get_bno055_sensor ###
 
 
-def get_direction(sensor):
+def get_direction(compass_sensor):
     
-    direction = sensor.euler[0]
+    direction = compass_sensor.euler[0]
     deviation = min (direction - 360, direction)
-    print(f'Direction: {direction} Heading: {heading} Deviation: {deviation}')
+    #print(f'Direction: {direction} Deviation: {deviation}')
 
     return direction
 
@@ -196,13 +196,13 @@ def scan_env(board, sensor, servo: int):
 ### scan_env ####
 
 
-def get_best_direction(distances: list):
+def get_best_direction(distances: dict):
     idx = 0
     dist = distances[idx][1]
-    for i in range(len(distances)):
-        if distances[i][1] > dist:
-            idx = i
-            dist = distances[i][1]
+    for key, value in distances.iteritems():
+        if value[1] > dist:
+            idx = key
+            dist = value[1]
             
         # if
         
@@ -210,22 +210,122 @@ def get_best_direction(distances: list):
     
     return idx
 
-### get_best_direction ####
+### get_best_direction ###
 
 
-def compute_turn():
+def all_too_small(distances: dict, minimum: int) -> bool:
+    for key, value in distances.iteritems():
+        if value[1] >= minimum:
+            return False
 
-    directions = scan_env(motors.motor_board, vl53, servo = 1)
-    direction = get_best_direction(directions)
-    print(direction)
-    print(dir(sensor))
+    # for
+
+    return True
+
+### all_too_small ###    
+
+
+def find_heading(table, heading):
+    for key, value in table.items():
+        if heading >= value[0] and heading <= value[1]:
+            return value[2]
+
+    # Nothing found, return None
+    return None
+
+### find_heading ###
+
+
+def get_distances(
+    motors: Object, 
+    distance_sensor: Object, 
+    ignore_forward: bool
+):
+    """ Get the distances at -90, -45, 0, 45, 90 degrees
+
+    Args:
+        motors (Object): Ref to motor board
+        distance_sensor (Object): Ref to distance sensor
+        ignore_forward (bool): When True, the forward distance will not be 
+            reported by setting it to -1
+
+    Returns:
+        Dict: Dictionary containing tuples with degrees and distance for the 
+            specific degrees. The key is not relevant.
+    """
+
+    directions = scan_env(motors.motor_board, distance_sensor, servo = 1)
+    if ignore_forward:
+        directions[2] = (0, -1)
+        
+    return directions
+
+### get_distances ###
+
+        
+def compute_turn(compass_sensor, distance_sensor, motors, ignore_forward, minimum_distance):
+
+    current_heading = get_direction(compass_sensor)
+    print('Current direction is:', current_heading)
     
-    return
+    directions = get_distances(motors, distance_sensor, ignore_forward)
+    print('Directions:', directions)
+    direction = get_best_direction(directions)
+    
+    print('Best scan result:', direction, directions[direction])
+    dir_change = directions[direction][0]
+    
+    print('Best direction is:', dir_change)
+
+    target = current_heading + dir_change
+    if target > 0: target -= 360
+    if target < 0: target += 360
+    
+    print('Target direction is:', target)
+    
+    # Create search tables
+    right = target - 180
+    table = {}
+    if right < 0:
+        table[0] = (right + 360, 360, 'right')
+        table[1] = (0, target, 'right')
+    else:
+        table[0] = (right, target, 'right')
+    # if
+    
+    left = target + 180
+    if left > 360:
+        table[2] = (target, 360, 'left')
+        table[3] = (0, left - 360, 'left')
+    else:
+        table[2] = (target, left, 'left')
+    # if
+    
+    print('Table:', table)
+    
+    s = input()
+    
+    return table, target
 
 ### compute_turn ###
+
+
+def rotate(compass_sensor, table, target):
+    
+    current_heading = get_direction(compass_sensor)
+    turn = find_heading(table, current_heading)
+    delta = abs(current_heading - target)
+            
+    print(f'[Heading: {current_heading}, Target: {target}, Delta: {delta}, Dir: {turn}]')
+    
+    motors.move_turn(SLOW_SPEED, turn, 0)
+        
+    return abs(delta) < 1
+
+### rotate ###
         
 
-def initialize(motors: dict) -> None:
+def initialize_motors(motors: dict) -> None:
     """ Initializes variables
 
     Args:
@@ -253,20 +353,11 @@ def initialize(motors: dict) -> None:
 
     return motor_kit, led
 
-### initialize ###
+### initialize_motors ###
 
-        
-def joy_ride(motors, led, sensor) -> None:
-    """ Drives a robotic vehicle with simple assumptions
 
-    Args:
-        motors: instantiation of MotorKit
-        led: instantiation of led
-        sensor: instantiation of a distance sensor
-    """
-    # everything setup: motors can be started
-    motors.set_motors(True)
-    
+def initialize_fsm():
+
     # Create state machine and add states
     fsm = vsFSM()
     fsm.add_states(['Fast', 'Slow', 'Stop', 'Back', 'Turn', 'Halt'])
@@ -283,15 +374,15 @@ def joy_ride(motors, led, sensor) -> None:
 
     fsm.add_transition('Stop', lambda inputs: inputs['Interrupt'], ['Halt'])
     fsm.add_transition('Stop', lambda inputs: time.time() - inputs['Timer'] < DR_STOP, ['Stop'])
-    fsm.add_transition('Stop', lambda inputs: time.time() - inputs['Timer'] >= DR_STOP, ['Back'])
+    fsm.add_transition('Stop', lambda inputs: time.time() - inputs['Timer'] >= DR_STOP, ['Scan'])
 
-    fsm.add_transition('Back', lambda inputs: inputs['Interrupt'], ['Halt'])
-    fsm.add_transition('Back', lambda inputs: inputs['Distance'] < SP_UNSAFE, ['Back'])
-    fsm.add_transition('Back', lambda inputs: inputs['Distance'] >= SP_UNSAFE, ['Scan'])
-    
     fsm.add_transition('Scan', lambda inputs: inputs['Interrupt'], ['Halt'])
     fsm.add_transition('Scan', lambda inputs: inputs['Distance'] < SP_UNSAFE, ['Back'])
     fsm.add_transition('Scan', lambda inputs: inputs['Distance'] >= SP_UNSAFE, ['Turn'])
+    
+    fsm.add_transition('Back', lambda inputs: inputs['Interrupt'], ['Halt'])
+    #fsm.add_transition('Back', lambda inputs: inputs['Distance'] < SP_UNSAFE, ['Back'])
+    fsm.add_transition('Back', lambda inputs: inputs['Distance'] >= SP_UNSAFE, ['Scan'])
     
     fsm.add_transition('Turn', lambda inputs: inputs['Interrupt'], ['Halt'])
     fsm.add_transition('Turn', lambda inputs: inputs['Distance'] < SP_SAFE, ['Turn'])
@@ -301,12 +392,30 @@ def joy_ride(motors, led, sensor) -> None:
 
     # Add input values
     fsm.set_input('Distance', SP_SAFE)
+    fsm.set_input('Distances', None)
+    fsm.set_input('Target', 0)
     fsm.set_input('Timer', time.time())
     fsm.set_input('Interrupt', False)
     fsm.set_input('Rotate', 0)
 
     # set start state
     fsm.set_start_state('Fast')
+    
+    return fsm
+
+### initialize_fsm ###
+
+        
+def joy_ride(motors, fsm, led, sensor) -> None:
+    """ Drives a robotic vehicle with simple assumptions
+
+    Args:
+        motors: instantiation of MotorKit
+        led: instantiation of led
+        sensor: instantiation of a distance sensor
+    """
+    # everything setup: motors can be started
+    motors.set_motors(True)
     
     # set current_state to start_state
     current_state = fsm.start_state
@@ -317,6 +426,7 @@ def joy_ride(motors, led, sensor) -> None:
         try:
             led.value = False
             time.sleep(0.25)
+            
             # acquire distance in front
             distance = get_distance(sensor)
             fsm.set_input('Distance', distance)
@@ -327,7 +437,7 @@ def joy_ride(motors, led, sensor) -> None:
             if new_state != current_state:
                 print('New state:', new_state)
                 
-                # set Timer because some state are time limited
+                # set Timer because some states are time limited
                 fsm.set_input('Timer', time.time())
                 current_state = new_state
                 
@@ -349,7 +459,7 @@ def joy_ride(motors, led, sensor) -> None:
                 
             elif current_state == 'Scan':
                 degrees = compute_turn()
-                inputs['Rotate'] = degrees
+                fsm.inputs['Rotate'] = degrees
                 
             elif current_state == 'Turn':
                 motors.move_turn(SLOW_SPEED, 'right', 0)
@@ -410,20 +520,36 @@ if __name__ == '__main__':
     MOTOR_BOARD = lib_kitronik_motor.GENERIC_4WD
 
     # initialize driving
-    motors, led = initialize(MOTOR_BOARD)
+    motors, led = initialize_motors(MOTOR_BOARD)
+
+    # Initialize Finite State Machine
+    fsm = initialize_fsm()
 
     # Test the compass
-    directions = scan_env(motors.motor_board, vl53, servo = 1)
-    direction = get_best_direction(directions)
+    #directions = scan_env(motors.motor_board, vl53, servo = 1)
+    #direction = get_best_direction(directions)
 
     print()
-    print('Distances:     ', directions)
-    print('Best direction:', direction, directions[direction])
+    #print('Distances:     ', directions)
+    #print('Best direction:', direction, directions[direction])
     
     # and start a joy ride
     print()
     print('=== Starting a joy ride ===')
-    #joy_ride(motors, led, vl53, bno055)
     
+    turn_table, target = compute_turn(bno055, vl53, motors, True)
+    fsm.input['Distances'] = turn_table
+    fsm.input['Target'] = target
+    target_reached = False
+    while not target_reached:
+        target_reached = rotate(bno055, turn_table, target)
+        time.sleep(1)
+        
+    #joy_ride(motors, fsm, led, vl53, bno055)
+     
     led.value = True
+    
+    print('* Target reached')
+    while True:
+        time.sleep(1)
     
