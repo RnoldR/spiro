@@ -199,7 +199,7 @@ def scan_env(board, sensor, servo: int):
 def get_best_direction(distances: dict):
     idx = 0
     dist = distances[idx][1]
-    for key, value in distances.iteritems():
+    for key, value in distances.items():
         if value[1] > dist:
             idx = key
             dist = value[1]
@@ -214,7 +214,7 @@ def get_best_direction(distances: dict):
 
 
 def all_too_small(distances: dict, minimum: int) -> bool:
-    for key, value in distances.iteritems():
+    for key, value in distances.items():
         if value[1] >= minimum:
             return False
 
@@ -274,44 +274,40 @@ def compute_turn(compass_sensor, distance_sensor, motors, ignore_forward, minimu
     
     print('Best scan result:', direction, directions[direction])
     dir_change = directions[direction][0]
-    
-    print('Best direction is:', dir_change)
+    target_distance = directions[direction][1]
+    print('Best direction is:', dir_change, 'being:', target_distance)
 
-    target = current_heading + dir_change
-    if target > 0: target -= 360
-    if target < 0: target += 360
+    target_angle = current_heading + dir_change
+    if target_angle > 0: target_angle -= 360
+    if target_angle < 0: target_angle += 360
     
-    print('Target direction is:', target)
+    print('Target direction is:', target_angle)
     
-    # Create search tables
-    right = target - 180
+    # Create rotation search tables
+    right = target_angle - 180
     table = {}
     if right < 0:
         table[0] = (right + 360, 360, 'right')
-        table[1] = (0, target, 'right')
+        table[1] = (0, target_angle, 'right')
     else:
-        table[0] = (right, target, 'right')
+        table[0] = (right, target_angle, 'right')
     # if
     
-    left = target + 180
+    left = target_angle + 180
     if left > 360:
-        table[2] = (target, 360, 'left')
+        table[2] = (target_angle, 360, 'left')
         table[3] = (0, left - 360, 'left')
     else:
-        table[2] = (target, left, 'left')
+        table[2] = (target_angle, left, 'left')
     # if
     
-    print('Table:', table)
-    
-    s = input()
-    
-    return table, target
+    return table, target_angle, target_distance
 
 ### compute_turn ###
 
 
-def rotate(compass_sensor, table, target):
-    
+def rotate(compass_sensor, table, inputs):
+    target = inputs['Target Angle']
     current_heading = get_direction(compass_sensor)
     turn = find_heading(table, current_heading)
     delta = abs(current_heading - target)
@@ -320,7 +316,7 @@ def rotate(compass_sensor, table, target):
     
     motors.move_turn(SLOW_SPEED, turn, 0)
         
-    return abs(delta) < 1
+    return abs(delta) < 1, turn
 
 ### rotate ###
         
@@ -360,7 +356,7 @@ def initialize_fsm():
 
     # Create state machine and add states
     fsm = vsFSM()
-    fsm.add_states(['Fast', 'Slow', 'Stop', 'Back', 'Turn', 'Halt'])
+    fsm.add_states(['Fast', 'Slow', 'Stop', 'Scan', 'Back', 'Turn', 'Halt'])
 
     # For each state add transitions
     fsm.add_transition('Fast', lambda inputs: inputs['Interrupt'], ['Halt'])
@@ -377,26 +373,26 @@ def initialize_fsm():
     fsm.add_transition('Stop', lambda inputs: time.time() - inputs['Timer'] >= DR_STOP, ['Scan'])
 
     fsm.add_transition('Scan', lambda inputs: inputs['Interrupt'], ['Halt'])
-    fsm.add_transition('Scan', lambda inputs: inputs['Distance'] < SP_UNSAFE, ['Back'])
-    fsm.add_transition('Scan', lambda inputs: inputs['Distance'] >= SP_UNSAFE, ['Turn'])
+    fsm.add_transition('Scan', lambda inputs: inputs['Target Distance'] < SP_SAFE, ['Back'])
+    fsm.add_transition('Scan', lambda inputs: True, ['Turn'])
     
     fsm.add_transition('Back', lambda inputs: inputs['Interrupt'], ['Halt'])
-    #fsm.add_transition('Back', lambda inputs: inputs['Distance'] < SP_UNSAFE, ['Back'])
-    fsm.add_transition('Back', lambda inputs: inputs['Distance'] >= SP_UNSAFE, ['Scan'])
+    fsm.add_transition('Back', lambda inputs: time.time() - inputs['Timer'] < DR_BACK, ['Back'])
+    fsm.add_transition('Back', lambda inputs: True, ['Stop'])
     
     fsm.add_transition('Turn', lambda inputs: inputs['Interrupt'], ['Halt'])
-    fsm.add_transition('Turn', lambda inputs: inputs['Distance'] < SP_SAFE, ['Turn'])
-    fsm.add_transition('Turn', lambda inputs: inputs['Distance'] >= SP_SAFE, ['Slow'])
+    fsm.add_transition('Turn', lambda inputs: inputs['Target Reached'], ['Slow'])
+    fsm.add_transition('Turn', lambda inputs: inputs, ['Turn'])
 
     fsm.add_transition('Halt', lambda inputs: True, ['Halt'])
 
     # Add input values
     fsm.set_input('Distance', SP_SAFE)
-    fsm.set_input('Distances', None)
-    fsm.set_input('Target', 0)
+    fsm.set_input('Target Angle', 0)
+    fsm.set_input('Target Distance', 0)
+    fsm.set_input('Target Reached', False)
     fsm.set_input('Timer', time.time())
     fsm.set_input('Interrupt', False)
-    fsm.set_input('Rotate', 0)
 
     # set start state
     fsm.set_start_state('Fast')
@@ -406,7 +402,7 @@ def initialize_fsm():
 ### initialize_fsm ###
 
         
-def joy_ride(motors, fsm, led, sensor) -> None:
+def joy_ride(motors, fsm, led, distance_sensor, compass_sensor) -> None:
     """ Drives a robotic vehicle with simple assumptions
 
     Args:
@@ -425,15 +421,21 @@ def joy_ride(motors, fsm, led, sensor) -> None:
     while current_state != 'Halt':
         try:
             led.value = False
-            time.sleep(0.25)
+            #time.sleep(0.25)
             
-            # acquire distance in front
-            distance = get_distance(sensor)
+            # acquire front distance 
+            distance = get_distance(distance_sensor)
             fsm.set_input('Distance', distance)
-            print('Current state:', current_state, ', distance =', distance)
+            print(f'Current state: {current_state}, distance = {distance}')
             
             # compute the new state
+            if current_state is None:
+                print('*** current_state is None')
+            
             new_state = fsm.evaluate(current_state)
+            if new_state is None:
+                print('*** new_state is None')
+            
             if new_state != current_state:
                 print('New state:', new_state)
                 
@@ -451,18 +453,28 @@ def joy_ride(motors, fsm, led, sensor) -> None:
             elif current_state == 'Slow':
                 motors.move_forward(SLOW_SPEED)
                 
-            elif current_state == 'Back':
-                motors.move_backward(SLOW_SPEED)
-                
             elif current_state == 'Stop':
                 motors.move_stop()
                 
             elif current_state == 'Scan':
-                degrees = compute_turn()
-                fsm.inputs['Rotate'] = degrees
+                turn_table, target_angle, target_distance = compute_turn(
+                    compass_sensor = compass_sensor, 
+                    distance_sensor = distance_sensor, 
+                    motors = motors, 
+                    ignore_forward = True, 
+                    minimum_distance = SP_SAFE
+                )
+                fsm.set_input('Target Angle', target_angle)
+                fsm.set_input('Target Distance', target_distance)
+                fsm.set_input('Target Reached', False)
+                
+            elif current_state == 'Back':
+                motors.move_backward(SLOW_SPEED)
                 
             elif current_state == 'Turn':
-                motors.move_turn(SLOW_SPEED, 'right', 0)
+                target_reached, turn = rotate(bno055, turn_table, fsm.inputs)
+                fsm.set_input('Target Reached', target_reached)
+                motors.move_turn(TURN_SPEED, turn, 0)
                 
             elif current_state == 'Halt':
                 led.value = False
@@ -499,8 +511,9 @@ if __name__ == '__main__':
     DR_BACK = 0.5
     
     # Speeds
-    MAX_SPEED =  75
-    SLOW_SPEED = 50
+    MAX_SPEED  = 75
+    SLOW_SPEED = 25
+    TURN_SPEED = 40
     
     #################### Create I2C bus ####################
     PIN_SDA = board.GP14
@@ -525,27 +538,21 @@ if __name__ == '__main__':
     # Initialize Finite State Machine
     fsm = initialize_fsm()
 
-    # Test the compass
-    #directions = scan_env(motors.motor_board, vl53, servo = 1)
-    #direction = get_best_direction(directions)
-
-    print()
-    #print('Distances:     ', directions)
-    #print('Best direction:', direction, directions[direction])
-    
-    # and start a joy ride
+    # Start a joy ride
     print()
     print('=== Starting a joy ride ===')
     
-    turn_table, target = compute_turn(bno055, vl53, motors, True)
-    fsm.input['Distances'] = turn_table
-    fsm.input['Target'] = target
-    target_reached = False
-    while not target_reached:
-        target_reached = rotate(bno055, turn_table, target)
-        time.sleep(1)
+    # turn_table, target, target_dist = compute_turn(bno055, vl53, motors, True, SP_SAFE)
+    # fsm.set_input('Target Angle', target)
+    # fsm.set_input('Target Distance', target_dist)
+    # fsm.set_input('Target Reached', False)
+    
+    # while not fsm.inputs['Target Reached']:
+    #     target_reached = rotate(bno055, turn_table, fsm.inputs)
+    #     fsm.inputs['Target Reached'] = target_reached
+    #     time.sleep(1)
         
-    #joy_ride(motors, fsm, led, vl53, bno055)
+    joy_ride(motors, fsm, led, vl53, bno055)
      
     led.value = True
     
