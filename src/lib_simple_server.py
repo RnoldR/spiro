@@ -10,11 +10,7 @@ import terminalio
 import microcontroller
 
 from digitalio import DigitalInOut, Direction
-from adafruit_httpserver.server import HTTPServer
-from adafruit_httpserver.request import HTTPRequest
-from adafruit_httpserver.response import HTTPResponse
-from adafruit_httpserver.methods import HTTPMethod
-from adafruit_httpserver.mime_type import MIMEType
+from adafruit_httpserver import Server, Request, Response, Websocket, GET, POST
 
 class SimpleServer(object):
     def __init__(self, ssid: str, password: str):
@@ -59,6 +55,7 @@ class SimpleServer(object):
             print(f"Ping google.com: {ms * 1000} ms") # % (wifi.radio.ping(ipv4) * 1000))
         else:
             print('*** Ping google.com yielded None: ignored.')
+        
         
         return pool
 
@@ -116,7 +113,7 @@ class SimpleServer(object):
         self.pool = self.wifi_connect(ssid, password, timeout)
         print(f"Connected to WiFi: {wifi.radio.ipv4_address}")
 
-        server = HTTPServer(self.pool)
+        server = Server(self.pool)
 
         print("starting server..")
         
@@ -139,40 +136,9 @@ class SimpleServer(object):
 ### Class: SimpleServer ###
 
 if __name__ == '__main__':
-    def web_content(title: str, distance, scanned):
-        """
-        the HTML script, setup as an f string
-        this way, can insert string variables from code.py directly
-        of note, use {{ and }} if something from html *actually* needs to be in brackets
-        i.e. CSS style formatting
-        """
-        
-        html = f"""
-            <h1>{title}</h1>
-            <p>This is a Pico W running an HTTP server with CircuitPython.</p>
-            <p>Nearest distance to the Pico W is
-            <span style="color: deeppink;">{distance} cm</span></p>
-            <p><b>Control the LED on the Pico W with these buttons:</b></p>
-            
-            <form accept-charset="utf-8" method="POST">
-                <button class="button" name="LED on" value="ON" type="submit">LED on</button>
-            </form>
-
-            <p><form accept-charset="utf-8" method="POST">
-                <button class="button" name="LED off" value="OFF" type="submit">LED off</button>
-            </form>
-            
-            <p>Scanned I2C devices: {scanned}</p>
-        """
-        
-        return html
-
-    ### web_page ###
-
-
     def handle_on():
         led.value = True
-        print('Robot started')
+        print('LED On')
         
         return
         
@@ -181,7 +147,7 @@ if __name__ == '__main__':
 
     def handle_off():
         led.value = False
-        print('Robot stopped')
+        print('LED Off')
         
         return
         
@@ -191,29 +157,74 @@ if __name__ == '__main__':
     # create the LedController server
     server = SimpleServer(os.getenv('WIFI_SSID'), os.getenv('WIFI_PASSWORD'))
 
+    def webpage(font_family, temperature, unit):
+        html = f"""
+        <!DOCTYPE html>
+        <html>
+        <head>
+        <meta http-equiv="Content-type" content="text/html;charset=utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        
+        <style>
+        html{{font-family: {font_family}; background-color: lightgrey;
+        display:inline-block; margin: 0px auto; text-align: center;}}
+          h1{{color: blue; width: 200; word-wrap: break-word; padding: 2vh; font-size: 35px;}}
+          
+          p{{font-size: 1.5rem; width: 200; word-wrap: break-word;}}
+              .button{{font-family: {font_family};display: inline-block;
+              background-color: black; border: none;
+              border-radius: 4px; color: white; padding: 16px 40px;
+              text-decoration: none; font-size: 30px; margin: 2px; cursor: pointer;}}
+          
+          p.dotted {{margin: auto; width: 75%; font-size: 25px; text-align: center;}}
+        </style>
+        </head>
+        
+        <body>
+        <title>SPIRO</title>
+        <h1>SPIRO</h1>
+        <br>
+        <p>This is the SPIRO robot running on a a Pico W+.</p>
+        <br>
+        <p class="dotted">The current ambient temperature near the Pico W is
+        <span style="color: blue;">{temperature:.0f}°{unit}</span></p><br>
+        
+        <h1>Control the LED on the Pico W with these buttons:</h1><br>
+        
+        <form accept-charset="utf-8" method="POST">
+        <button class="button" name="LED ON" value="ON" type="submit">LED ON</button></a></p></form>
+        
+        <p><form accept-charset="utf-8" method="POST">
+        <button class="button" name="LED OFF" value="OFF" type="submit">LED OFF</button></a></p></form>
+        
+        </body></html>
+        """
+        
+        return html
+    
+    ### webpage ###
+
+
     # define the POST message handlers
     @server.server.route("/")
-    def base(request: HTTPRequest):  # pylint: disable=unused-argument
-        #  serve the HTML f string with content type text/html
-        with HTTPResponse(request, content_type=MIMEType.TYPE_HTML) as response:
-            title = 'Pico W web server'
-            http_response = server.web_page(title, web_content(title, 'Unknown', 'None'))
-            print('created http response')
-            response.send(http_response)
-            
-        # with
-            
-        return
+    def base(request: Request):  # pylint: disable=unused-argument
+        print('At /')
+        #  serve HTML respons to request
+        response = Response(request, webpage(font_family, temperature, unit), content_type="text/html")
+        
+        return response
             
     ### base ###
 
 
-    @server.server.route("/", method=HTTPMethod.POST)
-    def buttonpress(request: HTTPRequest):
+    @server.server.route("/", POST)
+    def buttonpress(request: Request):
+        print('At / POST')
         # handle button presses on the site
 
         #  get the raw text
         raw_text = request.raw_request.decode("utf8")
+        #  the HTML script
         
         #  if the led on button was pressed
         if "ON" in raw_text:
@@ -224,23 +235,25 @@ if __name__ == '__main__':
             handle_off()
             
         #  reload site
-        with HTTPResponse(request, content_type=MIMEType.TYPE_HTML) as response:
-            title = 'Pico W web server'
-            http_response = server.web_page(title, web_content(title, 'Unknown', 'None'))
-            response.send(http_response)
+        response = Response(request, webpage(font_family, temperature, unit), content_type="text/html") 
             
-        return
+        return response
 
     ### buttonpress ###
-
+    
 
     #  onboard LED setup
     led = DigitalInOut(board.LED)
     led.direction = Direction.OUTPUT
     led.value = False
     
-    # address to ping to determine if connection is alive
+    # address to ping to determine if connection is alhttps:ive
     ping_address = ipaddress.ip_address("8.8.4.4")
+    
+    # Variables used in webpage
+    font_family = 'sans-serif'
+    temperature = 21.3
+    unit = 'C'
 
     # get clock value for timings
     clock = time.monotonic() #  time.monotonic() holder for server ping

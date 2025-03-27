@@ -34,8 +34,11 @@ def get_i2c_str(i2c):
 
 
 if __name__ == '__main__':
-    # Create I2C object
-    i2c_bus = busio.I2C(sda = board.GP16, scl = board.GP17
+    #################### Create I2C bus ####################
+    PIN_SDA = board.GP14
+    PIN_SCL = board.GP15
+
+    i2c_bus = busio.I2C(scl=PIN_SCL, sda=PIN_SDA)
 
     while True:
         i2c_devs = get_i2c_devices(i2c_bus)
