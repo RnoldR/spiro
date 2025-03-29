@@ -1,3 +1,4 @@
+import os
 import sys
 import math
 import time
@@ -7,9 +8,183 @@ import digitalio
 import adafruit_vl53l1x
 import adafruit_bno055
 
-
+from adafruit_httpserver import Server, Request, Response, Websocket, GET, POST
 from lib_vsfsm import vsFSM
+
 import lib_kitronik_motor
+import lib_simple_server as lss
+
+# Create the simple server
+server = lss.SimpleServer(os.getenv('WIFI_SSID'), os.getenv('WIFI_PASSWORD'))
+
+motors = None
+fsm = None
+
+
+def handle_on():
+    led.value = True
+    motors.set_motors(True)
+    #fsm.set_start_state('Fast')
+    fsm.set_current_state('Fast')
+    print('Motors switched on')
+    
+    return
+    
+### handle_on ###
+    
+
+def handle_off():
+    led.value = False
+    motors.set_motors(False)
+    fsm.set_input('Interrupt', True)
+    print('Motors switched off')
+    
+    return
+    
+### handle_off ###
+
+ 
+def web_content(values = None, devices = None):
+    value_list = ''
+    device_list = ''
+
+    if values is not None:
+        maxlen = 1
+        
+        for key, value in values.items():
+            if len(key) > maxlen:
+                maxlen = len(key)
+            # if
+        # for
+        
+        maxlen += 2
+        for key, value in values.items():
+            spaces = maxlen - len(key)
+            value_list += f'<p class="mono"; style="color: black">{key}:'
+            for i in range(spaces):
+                value_list += '&nbsp;'
+                
+            value_list += f'<span style="color: darkgreen">{str(value)}</span>'
+            value_list += '</p>\n'
+            
+        # for
+    # if
+    
+    if devices is not None:
+        for i, device in enumerate(devices):
+            device_list += f'<p class="mono">{i:2}: {str(device)}</p>\n'
+        # for
+    # if
+    
+    web_page = f"""
+        <!DOCTYPE html>
+        <html>
+        <head>
+        <meta http-equiv="Content-type" content="text/html;charset=utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <!--meta http-equiv="refresh" content="1"-->
+        <style>
+          html{{font-family: sans-serif; background-color: lightgrey;
+              display:inline-block; margin: 0px auto; text-align: left;}}
+              
+          h1{{color: darkblue; width: 200; word-wrap: break-word; font-size: 35px; text-align: left;}}
+          
+          p{{font-size: 1.5rem; width: 200; word-wrap: break-word; padding 4vh}}
+          p.mono {{font-family: monospace; margin: auto; font-size: 24px; text-align: left; padding 4vh}}
+              
+          .button{{font-family: sans-serif; display: inline-block;
+                   background-color: darkblue; border: none;
+                   border-radius: 4px; color: white; padding: 16px 40px;
+                   text-decoration: none; font-size: 30px; margin: 2px; cursor: pointer;}}
+                   
+          p.dotted {{margin: auto;width: 75%; font-size: 24px; text-align: center;}}
+          
+        </style>
+        </head>
+        
+        <body>
+        <title>SPIRO (Simple PIco RObot)</title>
+        <h1>SPIRO (Simple PIco RObot)</h1>
+           
+        <form accept-charset="utf-8" method="POST">
+        <button class="button" name="Start" value="ON" type="submit">On</button></a></p></form>
+
+        <p><form accept-charset="utf-8" method="POST">
+        <button class="button" name="Stop" value="OFF" type="submit">Off</button></a></p></form>
+        
+        <h1>Status</h1>
+        
+        <p>{value_list}</p>
+        
+        
+        <!--p><form accept-charset="utf-8" method="POST">
+        <button class="button" name="List I2C Devices" value="I2C" type="submit">List I2C Devices</button></a></p></form-->
+        
+        </body>
+        </html>
+                
+    """
+
+    #print(web_page)
+    
+    return web_page
+
+### web_content ###
+
+
+def get_status_dict(distance_sensor, compass_sensor):
+    status = {'Distance': get_distance(distance_sensor),
+              'Heading': get_direction(compass_sensor),
+              'Temperature': compass_sensor.temperature,
+              'State': fsm.get_current_state()}
+    
+    return status
+
+### get_status_dict ###
+
+
+# define GET handler
+@server.server.route("/")
+def base(request: Request):  # pylint: disable=unused-argument
+    print('At base')
+    
+    #  serve HTML respons to request
+    status = get_status_dict(vl53, bno055)
+    web_text = web_content(status, i2c_devices)
+    response = Response(request, web_text, content_type="text/html")
+    
+    return response
+        
+### base ###
+
+
+# define the POST message handlers
+@server.server.route("/", POST)
+def buttonpress(request: Request):
+    print('At buttonpress')
+    # handle button presses on the site
+
+    #  get the raw text
+    raw_text = request.raw_request.decode("utf8")
+    print(raw_text)
+    
+    #  if the led on button was pressed
+    if "ON" in raw_text:
+        handle_on()
+        
+    #  if the led off button was pressed
+    if "OFF" in raw_text:
+        handle_off()
+        
+    status = get_status_dict(vl53, bno055)
+    web_text = web_content(status, i2c_devices)
+    
+    #  reload site
+    response = Response(request, web_text, content_type="text/html") 
+        
+    return response
+
+### buttonpress ###
 
 
 def get_vl53_sensor(i2c_bus):
@@ -395,7 +570,7 @@ def initialize_fsm():
     fsm.set_input('Interrupt', False)
 
     # set start state
-    fsm.set_start_state('Fast')
+    fsm.set_start_state('Halt')
     
     return fsm
 
@@ -411,52 +586,49 @@ def joy_ride(motors, fsm, led, distance_sensor, compass_sensor) -> None:
         sensor: instantiation of a distance sensor
     """
     # everything setup: motors can be started
-    motors.set_motors(True)
+    motors.set_motors(False)
     
     # set current_state to start_state
-    current_state = fsm.start_state
-    print('Start state: ', current_state)
+    fsm.set_start_state('Halt')
+    fsm.set_current_state(fsm.get_start_state())
+    print('Start state: ', fsm.get_current_state())
     
     # while not halted process inputs and determine states
-    while current_state != 'Halt':
+    while not fsm.inputs['Interrupt']: 
         try:
             led.value = False
-            #time.sleep(0.25)
+            time.sleep(1)
             
             # acquire front distance 
             distance = get_distance(distance_sensor)
             fsm.set_input('Distance', distance)
-            print(f'Current state: {current_state}, distance = {distance}')
+            print(f'Current state: {fsm.get_current_state()}, distance = {distance}')
             
             # compute the new state
-            if current_state is None:
+            if fsm.get_current_state() is None:
                 print('*** current_state is None')
             
-            new_state = fsm.evaluate(current_state)
-            if new_state is None:
-                print('*** new_state is None')
-            
-            if new_state != current_state:
-                print('New state:', new_state)
+            fsm.evaluate()
+            if fsm.state_changed: #new_state != fsm.get_current_state():
+                print('New state:', fsm.get_current_state())
                 
                 # set Timer because some states are time limited
                 fsm.set_input('Timer', time.time())
-                current_state = new_state
                 
             # if
 
             # Take action based on state of the finite state machine
             led.value = True
-            if current_state == 'Fast':
+            if fsm.get_current_state() == 'Fast':
                 motors.move_forward(MAX_SPEED)
                 
-            elif current_state == 'Slow':
+            elif fsm.get_current_state() == 'Slow':
                 motors.move_forward(SLOW_SPEED)
                 
-            elif current_state == 'Stop':
+            elif fsm.get_current_state() == 'Stop':
                 motors.move_stop()
                 
-            elif current_state == 'Scan':
+            elif fsm.get_current_state() == 'Scan':
                 turn_table, target_angle, target_distance = compute_turn(
                     compass_sensor = compass_sensor, 
                     distance_sensor = distance_sensor, 
@@ -468,20 +640,20 @@ def joy_ride(motors, fsm, led, distance_sensor, compass_sensor) -> None:
                 fsm.set_input('Target Distance', target_distance)
                 fsm.set_input('Target Reached', False)
                 
-            elif current_state == 'Back':
+            elif fsm.get_current_state() == 'Back':
                 motors.move_backward(SLOW_SPEED)
                 
-            elif current_state == 'Turn':
+            elif fsm.get_current_state() == 'Turn':
                 target_reached, turn = rotate(bno055, turn_table, fsm.inputs)
                 fsm.set_input('Target Reached', target_reached)
                 motors.move_turn(TURN_SPEED, turn, 0)
                 
-            elif current_state == 'Halt':
+            elif fsm.get_current_state() == 'Halt':
                 led.value = False
                 motors.move_stop()
                 
             else:
-                print(f'*** Wrong state: "{current_state}" ***')
+                print(f'*** Wrong state: "{fsm.get_current_state()}" ***')
             
             # if
             
@@ -489,6 +661,8 @@ def joy_ride(motors, fsm, led, distance_sensor, compass_sensor) -> None:
             fsm.set_input('Interrupt', True)
             
         # try..except
+        
+        server.server.poll()
         
     # while
         
@@ -501,6 +675,7 @@ if __name__ == '__main__':
     print('=== Initializing ===')
     print()
     
+    server.server.poll()
     #################### Globals constants ####################
     # Distances in cm's
     SP_SAFE = 60
@@ -538,6 +713,9 @@ if __name__ == '__main__':
     # Initialize Finite State Machine
     fsm = initialize_fsm()
 
+    # Some other initializations
+    i2c_devices	= None
+    
     # Start a joy ride
     print()
     print('=== Starting a joy ride ===')
@@ -556,7 +734,8 @@ if __name__ == '__main__':
      
     led.value = True
     
-    print('* Target reached')
+    print('Target reached')
+    print('Press Ctrl-C to terminate.')
+    
     while True:
         time.sleep(1)
-    

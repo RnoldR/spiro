@@ -14,7 +14,7 @@ import adafruit_vl53l1x
 import adafruit_bno055
 #import adafruit_imageload
 
-from adafruit_display_text import label
+#from adafruit_display_text import label
 from digitalio import DigitalInOut, Direction
 from adafruit_httpserver import Server, Request, Response, Websocket, GET, POST
 
