@@ -1,38 +1,18 @@
 import time
 
+from lib_vsm import vsM
+
+# versy simple Probabilistic State Machine
 # State descriptions
-class vsFSM():
+class vsPSM():
     def __init__(self):
-        self.states = {}
-        self.inputs = {}
-        self.start_state = ''
-        self.current_state = ''
-        self.state_changes = True
+        self.probabilities = {}
+        
+        super(vsPSM, self).__init__()
 
         return
     
     ### __init__ ###
-    
-    
-    def add_state(self, state_name: str):
-        self.states[state_name] = {}
-
-        if len(self.start_state) == 0:
-            self.start_state = state_name
-
-        return
-    
-    ### add_state ###
-    
-    
-    def add_states(self, state_names: list):
-        if len(state_names) > 0:
-            for state_name in state_names:
-                self.add_state(state_name)
-
-        return
-    
-    ### add_states ###
     
     
     def add_transition(self,
@@ -90,7 +70,7 @@ class vsFSM():
             self.current_state = state
             
         else:
-            raise ValueError('Trying to set current_state to a non-existant values: ' + state);
+            raise ValueError('Trying to set current_state to a non-existant value: ' + state);
         
         # if
     
@@ -136,5 +116,7 @@ class vsFSM():
     
     ### evaluate ###
 
-### Class: vsFSM ###
+### Class: vsPSM ###
     
+    
+

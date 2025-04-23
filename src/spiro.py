@@ -342,24 +342,19 @@ def get_direction(compass_sensor):
 
 
 def scan_env(board, sensor, servo: int):
-    start_degree = 25
-    end_degree = 150
-    step_degree = (end_degree - start_degree) / 4
-    iter_degrees = [start_degree + i * step_degree for i in range(5)]
-    
-    board.servoWrite(servo, start_degree)
+    board.servoWrite(servo, START_DEGREE)
     distances = {}
 
     time.sleep(0.75)
     far_idx = -1
     far_dist = 0
     
-    for i, degrees in enumerate(iter_degrees):
+    for i, degrees in enumerate(ITER_DEGREES):
         board.servoWrite(servo, degrees)
-        time.sleep(0.75) #ramp speed over 10x180ms => approx 2 seconds.
+        time.sleep(TIME_ROTATE)
         
         dist = get_distance(sensor)
-        real_degree = -int(180 * (degrees - start_degree) / (end_degree - start_degree) - 90)
+        real_degree = -int(180 * (degrees - START_DEGREE) / (END_DEGREE - START_DEGREE) - 90)
         distances[i] = (real_degree, dist)
         
     # for
@@ -429,7 +424,7 @@ def get_distances(
             specific degrees. The key is not relevant.
     """
 
-    directions = scan_env(motors.motor_board, distance_sensor, servo = 1)
+    directions = scan_env(motors.motor_board, distance_sensor, servo = SERVO)
     if ignore_forward:
         directions[2] = (0, -1)
         
@@ -531,7 +526,7 @@ def initialize_fsm():
 
     # Create state machine and add states
     fsm = vsFSM()
-    fsm.add_states(['Fast', 'Slow', 'Stop', 'Scan', 'Back', 'Turn', 'Halt'])
+    fsm.add_states(['Fast', 'Slow', 'Stop', 'Scan', 'Rot8', 'Flash', 'Back', 'Turn', 'Halt'])
 
     # For each state add transitions
     fsm.add_transition('Fast', lambda inputs: inputs['Interrupt'], ['Halt'])
@@ -628,6 +623,7 @@ def joy_ride(motors, fsm, led, distance_sensor, compass_sensor) -> None:
             elif fsm.get_current_state() == 'Stop':
                 motors.move_stop()
                 
+                
             elif fsm.get_current_state() == 'Scan':
                 turn_table, target_angle, target_distance = compute_turn(
                     compass_sensor = compass_sensor, 
@@ -690,6 +686,19 @@ if __name__ == '__main__':
     SLOW_SPEED = 25
     TURN_SPEED = 40
     
+    # Scanning constants
+    STEPS = 5
+    MID_STEP = STEPS // 2
+    START_DEGREE = 25
+    END_DEGREE = 150
+    STEP_DEGREE = (END_DEGREE - START_DEGREE) / 4
+    ITER_DEGREES = [START_DEGREE + i * STEP_DEGREE for i in range(STEPS)]
+    MID_DEGREE = ITER_DEGREES[MID_STEP]
+
+    # Servp
+    SERVO = 1
+    TIME_ROTATE = 0.75
+
     #################### Create I2C bus ####################
     PIN_SDA = board.GP14
     PIN_SCL = board.GP15
@@ -707,8 +716,9 @@ if __name__ == '__main__':
     # get a generic four-wheel-drive model
     MOTOR_BOARD = lib_kitronik_motor.GENERIC_4WD
 
-    # initialize driving
+    # initialize driving and servo
     motors, led = initialize_motors(MOTOR_BOARD)
+    motors.motor_board.servoWrite(SERVO, ITER_DEGREES[MID_STEP])
 
     # Initialize Finite State Machine
     fsm = initialize_fsm()
@@ -720,16 +730,6 @@ if __name__ == '__main__':
     print()
     print('=== Starting a joy ride ===')
     
-    # turn_table, target, target_dist = compute_turn(bno055, vl53, motors, True, SP_SAFE)
-    # fsm.set_input('Target Angle', target)
-    # fsm.set_input('Target Distance', target_dist)
-    # fsm.set_input('Target Reached', False)
-    
-    # while not fsm.inputs['Target Reached']:
-    #     target_reached = rotate(bno055, turn_table, fsm.inputs)
-    #     fsm.inputs['Target Reached'] = target_reached
-    #     time.sleep(1)
-        
     joy_ride(motors, fsm, led, vl53, bno055)
      
     led.value = True

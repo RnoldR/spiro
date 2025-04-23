@@ -1,10 +1,11 @@
 import time
 
 # State descriptions
-class vsFSM():
+class vsM():
     def __init__(self):
         self.states = {}
         self.inputs = {}
+        self.outputs = {}
         self.start_state = ''
         self.current_state = ''
         self.state_changes = True
@@ -136,5 +137,7 @@ class vsFSM():
     
     ### evaluate ###
 
-### Class: vsFSM ###
+### Class: vsM ###
     
+    
+
